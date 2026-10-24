@@ -432,17 +432,45 @@ npx prisma init --datasource-provider postgresql
 cd ../..
 ```
 
-This generates `packages/server/prisma/schema.prisma` and `packages/server/.env`. Edit `schema.prisma`'s header to match the driver-adapter setup (full `users`/`tasks`/`comments` models arrive in Phase 1 — this phase just needs it to generate a client and connect):
+This generates `packages/server/prisma/schema.prisma` and `packages/server/.env`. Prisma 7 replaced the old `prisma-client-js` generator with `prisma-client`, which changes three things the original draft of this plan got wrong — corrected here against the installed `prisma-upgrade-v7` skill rather than guessed:
+
+1. **`output` is mandatory**, not optional. Unlike `prisma-client-js`, `prisma-client` has no default `node_modules` location — omit `output` and `prisma generate` has nowhere to write the client.
+2. **`datasource.url` moves out of `schema.prisma`** and into a new `prisma.config.ts`, read by the CLI (`generate`, `migrate dev`, etc.) — not by your application code.
+3. **Nothing loads `.env` automatically anymore**, for either the CLI or your app. Both need an explicit `dotenv` import.
+
+```bash
+npm install @prisma/adapter-pg pg -w packages/server
+npm install dotenv -w packages/server
+```
+
+`packages/server/prisma/schema.prisma`:
 
 ```prisma
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
+```
+
+`packages/server/prisma.config.ts` — note the filename: the Prisma CLI only auto-discovers `prisma.config.ts`, so if `prisma init` (or an upgrade tool) produced `prisma7.config.ts` instead, rename it, or every CLI command needs an explicit `--config` flag:
+
+```ts
+import 'dotenv/config';
+import { defineConfig, env } from 'prisma/config';
+
+export default defineConfig({
+  schema: 'prisma/schema.prisma',
+  migrations: {
+    path: 'prisma/migrations',
+  },
+  datasource: {
+    url: env('DATABASE_URL'),
+  },
+});
 ```
 
 `packages/server/.env`:
@@ -451,10 +479,10 @@ datasource db {
 DATABASE_URL="postgresql://app:app@localhost:5432/app"
 ```
 
-`packages/server/src/db.ts`:
+`packages/server/src/db.ts` — imports from the generated client path set by `output` above (`../src/generated/prisma` relative to `schema.prisma` resolves to `packages/server/src/generated/prisma`, so `./generated/prisma/client` relative to this file), not from `@prisma/client`:
 
 ```ts
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from './generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { env } from './env.js';
 
@@ -462,7 +490,11 @@ const adapter = new PrismaPg({ connectionString: env.DATABASE_URL });
 export const prisma = new PrismaClient({ adapter });
 ```
 
-Note: if `prisma generate` complains that driver adapters need enabling, add `previewFeatures = ["driverAdapters"]` to the `generator client` block above — Prisma 7.10.1's changelog should confirm whether this stabilized by this version; check before assuming either way.
+Run `npx prisma generate` from `packages/server` before `db.ts` will typecheck — the `./generated/prisma` directory doesn't exist until then. Add it to `.gitignore` too, since it's generated output, not source:
+
+```gitignore
+/packages/server/src/generated/
+```
 
 ---
 
@@ -495,9 +527,10 @@ export const env = parsed.data;
 
 ## 0.10 Bare Express app — `GET /health`
 
-`packages/server/src/index.ts`:
+`packages/server/src/index.ts` — `dotenv/config` has to be the first import, so `process.env` is populated before `env.js`'s top-level `schema.safeParse(process.env)` runs (ES module imports execute depth-first in source order, so this works as long as it's literally the first line):
 
 ```ts
+import 'dotenv/config';
 import express from 'express';
 import { env } from './env.js';
 import { prisma } from './db.js';
