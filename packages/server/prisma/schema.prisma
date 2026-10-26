@@ -11,3 +11,59 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+enum TaskStatus {
+  todo
+  in_progress
+  done
+}
+
+enum TaskVisibility {
+  public
+  private
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tasks    Task[]
+  comments Comment[]
+
+  @@map("users")
+}
+
+model Task {
+  id          String         @id @default(uuid())
+  ownerId     String         @map("owner_id")
+  title       String
+  description String?
+  status      TaskStatus     @default(todo)
+  visibility  TaskVisibility @default(private)
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at")
+
+  owner    User      @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  comments Comment[]
+
+  @@index([ownerId])
+  @@index([visibility])
+  @@map("tasks")
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  taskId    String   @map("task_id")
+  authorId  String?  @map("author_id")
+  body      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  task   Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([taskId, createdAt])
+  @@map("comments")
+}
